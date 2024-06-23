@@ -1,0 +1,22 @@
+{% extends "components/base.html" %}
+{% block title %}upload{% endblock %}
+
+{% block head %}
+<script src="/static/upload.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<main id="upload-page">
+    <div id="select-files">
+        Click Here / Drag & Drop Anywhere
+    </div>
+
+    <hr>
+
+    <div id="candidates">
+        <div onclick="this.remove()" class="overlay">
+            <img src="/static/dev/1.png">
+        </div>
+    </div>
+</main>
+{% endblock %}

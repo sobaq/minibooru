@@ -1,0 +1,27 @@
+{% extends "components/base.html" %}
+{% block title %}posts{% endblock %}
+
+{% block head %}
+<script src="/static/posts.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<main id="posts-page">
+    <div id="search-pane">
+        <nav>
+            <form>
+                <input autocomplete="off" placeholder="Query" id="query" name="query">
+            </form>
+        </nav>
+
+        <input autocomplete="off" type="checkbox" id="toggle-search-pane">
+        <label for="toggle-search-pane">Search</label>
+    </div>
+    
+    <section id="posts">
+
+    </section>
+
+    <hr>
+</main>
+{% endblock %}

@@ -7,6 +7,24 @@ edition = "2021"
 askama = { version = "0.12.1", features = ["with-axum"] }
 tokio = { version = "1.38.0", features = ["rt-multi-thread", "macros"] }
 anyhow = "1.0.86"
-axum = "0.7.5"
+axum = { version = "0.7.5", features = ["multipart"] }
 askama_axum = "0.4.0"
 tower-http = { version = "0.5.2", features = ["fs"] }
+serde = { version = "1.0.203", features = ["derive"] }
+toml = "0.8.14"
+thiserror = "1.0.61"
+log = "0.4.21"
+ffmpeg-next = "7.0.2"
+image = "0.25.1"
+pretty_env_logger = "0.5.0"
+regex = "1.10.5"
+serde_regex = "1.1.0"
+argon2 = "0.5.3"
+md5 = "0.7.0"
+axum-extra = { version = "0.9.3", features = ["cookie"] }
+uuid = { version = "1.9.1", features = ["serde"] }
+
+[dependencies.sqlx]
+version = "0.7.4"
+default-features = false
+features = ["postgres", "macros", "migrate", "runtime-tokio", "uuid"]

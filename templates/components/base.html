@@ -7,23 +7,30 @@
   </head>
   <body>
     <header>
-        <nav>
+        <nav id="main-nav">
             <span id="left">
-                <a href="/" id="logo">Minibooru</a>
+                <a href="/" id="logo"></a>
                 <a href="/posts">Posts</a>
-                <a href="/upload">Upload</a>
+                <a href="/tags">Tags</a>
+                <a href="/pools">Pools</a>
+                <a href="/sets">Sets</a>
             </span>
 
             <span id="right">
                 {% if signed_in %}
-                    <a href="/logout">Logout</a>
+                    <form action="/auth/logout" method="post">
+                      <button type="submit">Log out</button>
+                    </form>
                 {% else %}
-                    <a href="/login">Login</a>
+                    <a href="/auth">Account</a>
                 {% endif %}
             </span>
         </nav>
 
-        <hr>
+        <nav id="child-nav">
+          {% block child_nav %}
+          {% endblock %}
+        </nav>
     </header>
 
     {% block content %}

@@ -1,0 +1,23 @@
+{% extends "components/base.html" %}
+{% block title %}index{% endblock %}
+
+{% block head %}
+{% endblock %}
+
+{% block child_nav %}
+{% endblock %}
+
+{% block content %}
+<main id="index-page">
+    <h1>minibooru</h1>
+
+    <form action="/posts/search">
+        <input placeholder="Query" name="query">
+        <input type="submit" value="Search">
+    </form>
+
+    <div id="meta">
+        {{ post_count }} posts · {{ data_size }}
+    </div>
+</main>
+{% endblock %}

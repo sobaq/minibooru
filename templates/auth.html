@@ -1,0 +1,29 @@
+{% extends "components/base.html" %}
+{% block title %}posts{% endblock %}
+
+{% block head %}
+<script src="/static/auth.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<main id="auth-page">
+    <div id="auth">
+        <h1>Log in</h1>
+        <form id="form">
+            <div id="inputs">
+                <label for="username">Username</label>
+                <input name="username" pattern="{{ username_regex }}" autocomplete="off" id="username">
+                <label for="password">Password</label>
+                <input type="password" name="password" pattern="{{ password_regex }}" autocomplete="off" id="password">
+            </div>
+
+            <p id="error"></p>
+
+            <div id="buttons">
+                <input type="submit" value="Log in" id="log-in">
+                <input type="submit" value="Register" id="register">
+            </div>
+        </form>
+    </div>
+</main>
+{% endblock %}

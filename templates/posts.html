@@ -1,0 +1,24 @@
+{% extends "components/base.html" %}
+{% block title %}posts{% endblock %}
+
+{% block head %}
+<script src="/static/posts.js" defer></script>
+{% endblock %}
+
+{% block child_nav %}
+{% include "components/post_child_nav.html" %}
+{% endblock %}
+
+{% block content %}
+<main id="posts-page">
+    {% include "components/search_pane.html" %}
+    
+    <section id="posts">
+        {% for post in results %}
+            <a href="{{ post.url }}">
+                <img src="{{ post.thumbnail_path }}">
+            </a>
+        {% endfor %}
+    </section>
+</main>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "components/base.html" %}
+{% block title %}post{% endblock %}
+
+{% block head %}
+<script src="/static/posts.js" defer></script>
+{% endblock %}
+
+{% block child_nav %}
+{% include "components/post_child_nav.html" %}
+{% endblock %}
+
+{% block content %}
+<main id="post-page">
+    {% include "components/search_pane.html" %}
+
+    <div id="image">
+        <section id="image-data">
+            <h1>Tags</h1>
+            <ul>
+                <li>a</li>
+                <li>a</li>
+                <li>a</li>
+                <li>a</li>
+                <li>a</li>
+                <li>a</li>
+            </ul>
+
+            <h1>Information</h1>
+            <h3>ID</h3>
+            <p>4391</p>
+            
+            <h3>Source(s)</h3>
+            <p>
+                <a href="">https://example.com/abc</a>
+            </p>
+
+            <h3>Posted</h3>
+            <p>54 minutes ago</p>
+
+            <h3>Resolution</h3>
+            <p>1920x1080</p>
+        </section>
+
+        <div>
+            <img src="{{ media_url }}">
+        </div>
+    </div>
+</main>
+{% endblock %}

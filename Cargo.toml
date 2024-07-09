@@ -1,0 +1,52 @@
+[package]
+name = "minibooru"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = true
+
+[features]
+default = []
+static = ["ffmpeg-next/build"]
+
+[dependencies]
+tokio = { version = "1.38.0", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1.0.203", features = ["derive"] }
+toml = "0.8.14"
+regex = "1.10.5"
+serde_regex = "1.1.0"
+uuid = { version = "1.9.1", features = ["serde"] }
+# Crypto
+argon2 = "0.5.3"
+md-5 = "0.10.6"
+hex = "0.4.3"
+
+# Web
+askama = { version = "0.12.1", features = ["with-axum"] }
+axum = { version = "0.7.5", features = ["multipart"] }
+askama_axum = "0.4.0"
+tower-http = { version = "0.5.2", features = ["fs"] }
+axum-extra = { version = "0.9.3", features = ["cookie"] }
+
+# Error management / logging
+anyhow = "1.0.86"
+thiserror = "1.0.61"
+log = "0.4.21"
+pretty_env_logger = "0.5.0"
+
+# Media
+ffmpeg-next = "7.0.2"
+infer = "0.16.0"
+
+[dependencies.sqlx]
+version = "0.7.4"
+default-features = false
+features = ["postgres", "macros", "migrate", "runtime-tokio", "uuid"]

@@ -1,0 +1,60 @@
+{% extends "components/base.html" %}
+{% block title %}upload{% endblock %}
+
+{% block head %}
+<script src="/static/upload.js" defer></script>
+{% endblock %}
+
+{% block child_nav %}
+{% include "components/post_child_nav.html" %}
+{% endblock %}
+
+{% block content %}
+<main id="upload-page">
+    <div id="select-files">
+        Click Here / Drag & Drop Anywhere
+    </div>
+
+    <div id="util-bar">
+        <button id="begin-upload">
+            Upload
+        </button>
+    </div>
+
+    <hr>
+
+    <!-- <div id="edit-pane">
+        <nav>
+            <textarea></textarea>
+        </nav>
+
+        <input autocomplete="off" type="checkbox" id="toggle-search-pane">
+        <label for="toggle-search-pane">Search</label>
+    </div> -->
+
+    <div id="candidates">
+    </div>
+</main>
+
+<template id="image-candidate-template">
+    <div class="candidate">
+        <img>
+
+        <div class="overlay">
+            <button class="edit-button"><img src="/static/icons/edit.png"></button>
+            <button class="trash-button"><img src="/static/icons/trash.png"></button>
+        </div>
+    </div>
+</template>
+
+<template id="video-candidiate-template">
+    <div class="candidate">
+        <video muted preload="metadata"></video>
+
+        <div class="overlay">
+            <button class="edit-button"><img src="/static/icons/edit.png"></button>
+            <button class="trash-button"><img src="/static/icons/trash.png"></button>
+        </div>
+    </div>
+</template>
+{% endblock %}

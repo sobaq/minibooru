@@ -1,0 +1,2 @@
+- Cache authentication information
+- Ensure `infer` supports all supported mime types

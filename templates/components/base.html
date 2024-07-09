@@ -1,0 +1,40 @@
+{% macro header_link(url, name) %}
+  <a href="{{ url }}">{{ name }}</a>
+{% endmacro %}
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>{% block title %}{% endblock %} - minibooru</title>
+    <link rel="stylesheet" href="/static/stylesheet.css">
+    {% block head %}{% endblock %}
+  </head>
+  <body>
+    <header>
+        <nav id="main-nav">
+            <span id="left">
+                {% call header_link("/", "Home") %}
+                {% call header_link("/posts", "Posts") %}
+                {% call header_link("/tags", "Tags") %}
+                {% call header_link("/pools", "Pools") %}
+                {% call header_link("/sets", "Sets") %}
+            </span>
+
+            <span id="right">
+                {% if signed_in %}
+                    <form action="/api/auth/logout" method="post">
+                      <button type="submit">Log out</button>
+                    </form>
+                {% else %}
+                    <a href="/auth">Account</a>
+                {% endif %}
+            </span>
+        </nav>
+
+        <nav id="child-nav">{%- block child_nav -%}{% endblock %}</nav>
+    </header>
+
+    {% block content %}
+    {% endblock %}
+  </body>
+</html>

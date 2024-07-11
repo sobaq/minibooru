@@ -17,6 +17,12 @@ pub struct Network {
 #[derive(Deserialize)]
 pub struct Data {
     media: std::path::PathBuf,
+    pub thumbnails: DataThumbnails,
+}
+
+#[derive(Deserialize)]
+pub struct DataThumbnails {
+    pub resolution: u32,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +31,8 @@ pub struct Accounts {
     pub username_regex: regex::Regex,
     #[serde(with = "serde_regex", rename = "password-regex")]
     pub password_regex: regex::Regex,
+    #[serde(rename = "initial-superuser-password")]
+    pub initial_superuser_password: String,
 }
 
 impl Data {
@@ -36,10 +44,5 @@ impl Data {
     /// Returns the root path for storing thumbnails
     pub fn thumbnails(&self) -> PathBuf {
         self.media.join("thumb")
-    }
-
-    /// Returns the root path for storing temporary files
-    pub fn temp(&self) -> PathBuf {
-        self.media.join("temp")
     }
 }

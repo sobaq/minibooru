@@ -11,7 +11,9 @@ const supportedImages = [
 ];
 
 const files = { };
-onmessage = async (data) => {
+onmessage = async (event) => {
+    const data = event.data;
+
     if (data.type === 'file') {
         const file = data.data;
 
@@ -25,17 +27,24 @@ onmessage = async (data) => {
     
         const url = URL.createObjectURL(file);
         const format = file.type.split('/')[0];
-        postMessage([format, url]);
+        postMessage({ type: 'candidate', data: [format, url] });
     
         files[url] = file;
     } else if (data.type === 'begin-upload') {
-        for (let [key, value] of Object.entries(files)) {
+        for (let [url, value] of Object.entries(files)) {
             const fd = new FormData();
             fd.append('file', value);
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/posts/upload', true);
             xhr.send(fd);
+
+            delete files[url];
+            postMessage({ type: 'uploaded', data: url });
         }
+    } else if (data.type === 'remove-candidate') {
+        const url = data.data;
+
+        delete files[url];
     }
 };

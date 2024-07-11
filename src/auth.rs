@@ -1,4 +1,3 @@
-use anyhow::Context;
 use argon2::{password_hash::{rand_core::OsRng, SaltString}, PasswordHasher, PasswordVerifier};
 use askama_axum::IntoResponse;
 use axum::{extract::State, response::Redirect, routing::{get, post}, Form, Router};
@@ -6,6 +5,7 @@ use axum_extra::extract::{cookie::{Cookie, SameSite}, CookieJar};
 use sqlx::types::Uuid;
 use axum::{async_trait, extract::{FromRef, FromRequestParts}, http::request::Parts};
 
+use crate::traits::TransposeValues;
 use crate::error::{Error, ResultExt};
 
 #[derive(askama_axum::Template)]
@@ -25,6 +25,7 @@ struct Credentials {
 /// Extract and validate a users session token, retrieving their user ID.
 pub struct Authentication {
     pub db: sqlx::PgPool,
+    pub group_id: Option<i32>,
     pub id: Option<Uuid>,
 }
 
@@ -52,18 +53,24 @@ impl Authentication {
     }
 
     pub async fn has(&self, permission: Permission) -> crate::Result<bool> {
-        Ok(sqlx::query("
-            SELECT 1
-            FROM permissions
-            WHERE user_id IS NOT DISTINCT FROM $1
+        Ok(sqlx::query_scalar("
+            SELECT EXISTS (
+                SELECT 1 AS result
+                FROM groups
+                WHERE id = $1
+                AND superuser = true
+            ) OR EXISTS (
+                SELECT 1 AS result
+                FROM permissions
+                WHERE group_id IS NOT DISTINCT FROM $1
                 AND operation = $2
-                AND resource = $3;
-        ")  .bind(self.id)
+                AND resource = $3
+            );
+        ")  .bind(self.group_id)
             .bind(permission.0)
             .bind(permission.1)
-            .fetch_optional(&self.db)
-            .await?
-            .is_some())
+            .fetch_one(&self.db)
+            .await?)
     }
 }
 
@@ -96,6 +103,7 @@ async fn logout(
             DELETE FROM sessions WHERE token = $1;
         ").bind(session).execute(&state.db).await;
 
+        // TODO: this doesn't remove the cookie for some reason
         (jar.remove("session"), Redirect::to("/"))
     } else {
         (jar, Redirect::to("/"))
@@ -108,7 +116,7 @@ async fn login(
     Form(desired): Form<Credentials>
 ) -> crate::Result<CookieJar> {
     let (user_id, correct_password): (Uuid, String) = sqlx::query_scalar("
-        SELECT id, password
+        SELECT (id, password)
         FROM users
         WHERE username = $1; 
     ")  .bind(desired.username)
@@ -152,7 +160,6 @@ async fn register(
         .await
         .on_constraint("username_unique", |_| crate::Error::Conflict(String::from("Username already taken")))?;
 
-
     add_sign_in_cookie(&state.db, id, jar).await
 }
 
@@ -172,7 +179,7 @@ async fn add_sign_in_cookie(db: &sqlx::PgPool, user_id: Uuid, jar: CookieJar) ->
     Ok(jar.add(cookie))
 }
 
-fn kdf(input: &str) -> String {
+pub fn kdf(input: &str) -> String {
     let hasher = argon2::Argon2::default();
     hasher.hash_password(input.as_bytes(), &SaltString::generate(&mut OsRng)).unwrap().to_string()
 }
@@ -189,20 +196,27 @@ where
         let state = crate::State::from_ref(state);
         let jar = CookieJar::from_headers(&parts.headers);
 
-        let id: crate::Result<Uuid> = try {
-            let token = jar.get("session").context("no session cookie")?.value();
-            let token = Uuid::parse_str(&token).context("couldn't parse session cookie")?;
-    
-            sqlx::query_scalar("
-                SELECT user_id FROM sessions WHERE token = $1;
-            ")  .bind(token)
-                .fetch_one(&state.db)
-                .await?
-        };
+        let token = jar.get("session")
+            .map(Cookie::value).map(Uuid::parse_str)
+            .transpose().ok().flatten();
 
-        Ok(Authentication {
-            db: state.db,
-            id: id.ok(),
-        })
+        let (id, group_id): (Option<Uuid>, Option<i32>) = sqlx::query_scalar("
+            WITH user_id AS (
+                SELECT user_id AS id
+                FROM sessions
+                WHERE token = $1
+            ), group_id AS (
+                SELECT group_id AS id
+                FROM users, user_id
+                WHERE users.id = user_id.id
+            )
+            SELECT (user_id.id, group_id.id)
+            FROM user_id, group_id
+        ")  .bind(token)
+            .fetch_optional(&state.db)
+            .await?
+            .transpose_values();
+
+        Ok(Authentication { db: state.db, group_id, id })
     }
 }

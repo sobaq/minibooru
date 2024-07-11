@@ -10,7 +10,10 @@ use serde::Serialize;
 use tokio::{fs::{self, File}, io::AsyncWriteExt};
 use infer::MatcherType;
 
-use crate::{auth::{Authentication, Operation::*, Permission, Resource::*}, error::ResultExt};
+use crate::{
+    auth::{Authentication, Operation::*, Permission, Resource::*},
+    query::Query,
+};
 
 #[derive(askama_axum::Template)]
 #[template(path = "posts.html")]
@@ -55,6 +58,7 @@ pub fn routes() -> Router<crate::State> {
 async fn posts(
     auth: Authentication,
     State(state): State<crate::State>,
+    query: Query,
 ) -> crate::Result<impl IntoResponse> {
     let results: Vec<Result> = sqlx::query_as("
         SELECT ('/posts/' || id)                    AS url,
@@ -62,6 +66,8 @@ async fn posts(
         FROM posts
     ")  .fetch_all(&state.db)
         .await?;
+
+    log::debug!("Serving query {query:?}");
 
     Ok(Posts {
         signed_in: auth.signed_in(),
@@ -107,12 +113,6 @@ async fn api_upload(
     Ok(Json(res))
 }
 
-/// TODO:
-///   - ensure we've read a fair amount (say 4k) of an in file to ensure we can
-///     figure its type out accurately.
-///   - check for duplicates earlier, maybe a dedicated endpoint the client can
-///     request before beginning upload
-///   - (!!) ensure temporary file is deleted if upload fails
 async fn save_multipart_file(
     user: &Authentication,
     state: &crate::State,
@@ -122,20 +122,18 @@ async fn save_multipart_file(
     let first_chunk = field.chunk().await?.ok_or_else(|| crate::Error::BadRequest("empty file".to_string()))?;
     let mime = infer::get(&first_chunk)
         .ok_or(crate::Error::UnsupportedMediaType(String::from("couldn't determine")))?;
+    let ext = mime.extension();
     if !crate::UNDERSTOOD_MIMES.contains(&mime.mime_type()) {
         return Err(crate::Error::UnsupportedMediaType(format!("MIME type {mime} is unsupported")));
     }
-    let ext = mime.extension();
-
     log::debug!("Inferred from {}b: {mime}", first_chunk.len());
 
-    // Save it to a temporary path
-    let temp_path = state.config.data.temp().join(temp_filename());
+    // Write it to a temporary path while calculating its hash
+    let temp_path = std::env::temp_dir().join(temp_filename());
     let mut temp_file = create_open(&temp_path).await?;
     let hash = {
         let mut hasher = md5::Md5::new();
 
-        // Remember this is the SECOND part of the file.
         hasher.update(&first_chunk);
         temp_file.write_all(&first_chunk).await?;
         while let Some(chunk) = field
@@ -148,33 +146,25 @@ async fn save_multipart_file(
 
         hasher.finalize().encode_hex::<String>()
     };
-
     let hash_tree = PathBuf::from(&hash[0..2]).join(&hash[2..4]);
     let hash_path = hash_tree.join(&hash).with_extension(ext);
 
-    // Save a thumbnail
-    let thumb_hash_path = hash_tree.join(&hash).with_extension("webp");
-    let thumb_path = state.config.data.thumbnails().join(&thumb_hash_path);
-    let (w, h) = create_thumbnail(&temp_path, &thumb_path).await?;
-
-    let resting_place = state.config.data.media().join(&hash_path);
-    fs::create_dir_all(resting_place.parent().unwrap()).await?;
-    fs::rename(&temp_path, &resting_place).await?;
-
-    // Create post in database
+    // Create a database entry for it
+    let (w, h) = media_dimensions(&temp_path)?;
     let media_type = match mime.matcher_type() {
         MatcherType::Image => "image",
         MatcherType::Video => "video",
         _ => unreachable!(),
     };
-
-    let file_size: i64 = fs::metadata(resting_place)
+    let file_size: i64 = fs::metadata(&temp_path)
         .await?
         .size()
         .try_into()
-        .map_err(|_| crate::Error::ContentTooLarge(String::from("wtf")))?;
+        .map_err(|_| crate::Error::ContentTooLarge(String::from("Files over 9,300 petabytes are not supported")))?;
+    let thumb_hash_path = hash_tree.join(&hash).with_extension("webp");
+    let thumb_path = state.config.data.thumbnails().join(&thumb_hash_path);
 
-    let post_id: i32 = sqlx::query_scalar("
+    let post_id = sqlx::query_scalar("
         INSERT INTO posts (uploader_id, md5, width, height, media_type, file_size, media_path, thumbnail_path)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
@@ -187,10 +177,38 @@ async fn save_multipart_file(
         .bind(hash_path.to_string_lossy())
         .bind(thumb_hash_path.to_string_lossy())
         .fetch_one(&state.db)
-        .await
-        .on_constraint("posts_md5_key", |_| crate::Error::BadRequest(String::from("Duplicate post")))?;
+        .await;
 
-    Ok(UploadResponse { post_id, })
+    // Move the media to its resting place, report the upload as a duplicate, or otherwise fail
+    match post_id {
+        Ok(post_id) => {
+            let resting_place = state.config.data.media().join(&hash_path);
+            fs::create_dir_all(resting_place.parent().unwrap()).await?;
+            fs::rename(temp_path, &resting_place).await?;
+        
+            create_thumbnail(&resting_place, &thumb_path, state.config.data.thumbnails.resolution).await?;
+            
+            Ok(UploadResponse { post_id, })
+        },
+        Err(sqlx::Error::Database(dbe)) if dbe.constraint() == Some("posts_md5_key") => {
+            fs::remove_file(&temp_path).await?;
+            Err(crate::Error::Conflict(String::from("Duplicate post")))
+        },
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// TODO: It might be worth reusing the ictx/input/decoder from this function
+/// in create_thumbnail etc. Not sure of the performance implication of
+/// parsing the file twice for this.
+fn media_dimensions<P: AsRef<Path>>(path: P) -> crate::Result<(i32, i32)> {
+    let ictx = ffmpeg::format::input(&path)?;
+    let input = ictx.streams().best(ffmpeg::media::Type::Video)
+        .ok_or(crate::Error::BadRequest("Media has no streams".to_string()))?;
+    let context_decoder = CodecContext::from_parameters(input.parameters())?;
+    let decoder = context_decoder.decoder().video()?;
+
+    Ok((decoder.width() as i32, decoder.height() as i32))
 }
 
 // Create and open a file as read+write, creating its subdirectories if they
@@ -202,13 +220,71 @@ async fn create_open<P: AsRef<Path>>(path: P) -> crate::Result<File> {
     Ok(File::create_new(path).await?)
 }
 
-/// TODO: This function returns the source video's width and height for the database
-/// because it's the only place with an open video context. Bit of a hack.
-async fn create_thumbnail(src: &Path, dst: &Path) -> crate::Result<(i32, i32)> {
-    let (frame, w, h) = first_frame(&src).context("Couldn't extract first frame of uploaded media")?;
-    write_frame(frame, dst).await.context("Couldn't write out computed frame")?;
+async fn create_thumbnail(src: &Path, dst: &Path, res: u32) -> crate::Result<()> {
+    let original_frame = first_frame(&src).context("Couldn't extract first frame of uploaded media")?;
+    let scaled_frame = scale_frame(original_frame, res)?;
+    write_frame(scaled_frame, dst).await.context("Couldn't write out computed frame")?;
 
-    Ok((w, h))
+    Ok(())
+}
+
+
+/// Returns the first full frame from the input.
+fn first_frame(src: &Path) -> crate::Result<Video> {
+    let mut ictx = ffmpeg::format::input(&src)?;
+    let seek_sec = (ictx.duration() / 2).rescale((1, 1), ffmpeg::rescale::TIME_BASE);
+    ictx.seek(seek_sec, ..seek_sec)?;
+
+    let input = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or(crate::Error::BadRequest("Media has no streams".to_string()))?;
+    let video_stream_index = input.index();
+
+    let context_decoder = CodecContext::from_parameters(input.parameters())?;
+    let mut decoder = context_decoder.decoder().video()?;
+
+    // I'm not sure if there's an opportunity for a DOS by sending a large video
+    // that contains no full frames so I'll play it safe.
+    let mut frames_decoded = 0;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == video_stream_index {
+            let mut frame = Video::empty();
+            while decoder.receive_frame(&mut frame).is_err() {
+                decoder.send_packet(&packet)?;
+                if frames_decoded > 10 {
+                    return Err(crate::Error::UnsupportedMediaType(
+                        "Couldn't decode a thumbnail frame".to_string()
+                    ))
+                }
+                frames_decoded += 1;
+            };
+
+            frame.set_pts(Some(0));
+            return Ok(frame);
+        }
+    }
+
+    Err(crate::Error::UnsupportedMediaType("couldn't decode a frame".to_string()))
+}
+
+fn scale_frame(frame: Video, to: u32) -> crate::Result<Video> {
+    let (sw, sh) = (frame.width(), frame.height());
+    let ratio = (to as f32 / sw as f32).min(to as f32 / sh as f32);
+    let (w, h) = ((sw as f32 * ratio) as u32, (sh as f32 * ratio) as u32);
+
+    let mut scaler = ScalingContext::get(
+        frame.format(),
+        sw, sh,
+        ffmpeg::format::Pixel::YUV420P,
+        w, h,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )?;
+
+    let mut scaled_frame = Video::empty();
+    scaler.run(&frame, &mut scaled_frame)?;
+
+    Ok(scaled_frame)
 }
 
 // TODO: use avif instead of webp
@@ -216,7 +292,6 @@ async fn write_frame(frame: Video, dst: &Path) -> crate::Result<()> {
     // HACK: Make sure the directory exists
     fs::create_dir_all(dst.parent().expect("write_frame called with invalid dst")).await?;
 
-    // let avif_encoder = codec::encoder::find(codec::id::Id::AV1)
     let webp_encoder = codec::encoder::find(codec::id::Id::WEBP)
         .expect("ffmpeg couldn't find thumbnail codec encoder");
     let codec_ctx = CodecContext::new_with_codec(webp_encoder);
@@ -226,10 +301,6 @@ async fn write_frame(frame: Video, dst: &Path) -> crate::Result<()> {
     encoder.set_width(frame.width());
     encoder.set_format(frame.format());
     encoder.set_time_base(ffmpeg::Rational::new(1, 1));
-    // unsafe { ffmpeg::ffi::av_opt_set((*encoder.as_mut_ptr()).priv_data, c"crf".as_ptr(), c"28".as_ptr(), 0); }
-    // encoder.set_aspect_ratio(frame.aspect_ratio());
-    // encoder.set_frame_rate::<f64>(None);
-    // encoder.set_flags(codec::Flags::GLOBAL_HEADER);
     let mut opened_encoder = encoder.open()?;
 
     let mut output = ffmpeg::format::output(dst)?;
@@ -248,63 +319,6 @@ async fn write_frame(frame: Video, dst: &Path) -> crate::Result<()> {
     output.write_trailer()?;
 
     Ok(())
-}
-
-/// Returns the first full image/frame from an input
-fn first_frame(src: &Path) -> crate::Result<(Video, i32, i32)> {
-    let mut ictx = ffmpeg::format::input(&src)?;
-    // move a few seconds forward to hopefully get a good thumbnail
-    // TODO: extract thumbnail from middle of video, e.g. actually determine its length
-    let seek_sec = 3_i64.rescale((1, 1), ffmpeg::rescale::TIME_BASE);
-    ictx.seek(seek_sec, ..seek_sec)?;
-
-    let input = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or(crate::Error::BadRequest("Media has no streams".to_string()))?;
-    let video_stream_index = input.index();
-
-    let context_decoder = CodecContext::from_parameters(input.parameters())?;
-    let mut decoder = context_decoder.decoder().video()?;
-    let (w, h) = (decoder.width() as i32, decoder.height() as i32);
-
-    let mut scaler = ScalingContext::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::YUV420P,
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
-    )?;
-
-    // I'm not sure if there's an opportunity for a DOS by sending a large video
-    // that contains no full frames so I'll play it safe.
-    let mut frames_decoded = 0;
-    for (stream, packet) in ictx.packets() {
-        if stream.index() == video_stream_index {
-            let mut decoded_video = Video::empty();
-            while decoder.receive_frame(&mut decoded_video).is_err() {
-                decoder.send_packet(&packet)?;
-                if frames_decoded > 10 {
-                    return Err(crate::Error::UnsupportedMediaType(
-                        "Couldn't decode a thumbnail frame".to_string()
-                    ))
-                }
-                frames_decoded += 1;
-            };
-
-            let mut frame = Video::empty();
-            scaler.run(&decoded_video, &mut frame)?;
-
-            decoder.send_eof()?;
-            frame.set_pts(Some(0));
-            return Ok((frame, w, h));
-        }
-    };
-
-    decoder.send_eof()?;
-    Err(crate::Error::UnsupportedMediaType("couldn't decode a frame".to_string()))
 }
 
 fn temp_filename() -> String {

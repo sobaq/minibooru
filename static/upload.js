@@ -6,25 +6,37 @@ const videoCandidiateTemplate = document.getElementById('video-candidiate-templa
 
 const worker = new Worker('/static/upload_worker.js');
 worker.onmessage = (event) => {
-    const [format, url] = event.data;
+    const data = event.data;
+
+    if (data.type === 'candidate') {
+        const [format, url] = data.data;
     
-    let candidate;
-    if (format === 'image') {
-        candidate = imageCandidiateTemplate.cloneNode(true).content;
-        candidate.querySelector('img').src = url;
-    } else if (format === 'video') {
-        candidate = videoCandidiateTemplate.cloneNode(true).content;
-        candidate.querySelector('video').src = url;
+        let candidate;
+        if (format === 'image') {
+            candidate = imageCandidiateTemplate.cloneNode(true).content;
+            candidate.querySelector('img').src = url;
+        } else if (format === 'video') {
+            candidate = videoCandidiateTemplate.cloneNode(true).content;
+            candidate.querySelector('video').src = url;
+        }
+    
+        candidate.querySelector('.edit-button').addEventListener('click', () => {
+            // TODO
+        });
+        candidate.querySelector('.trash-button').addEventListener('click', (e) => {
+            const candidate = e.target.closest('.candidate');
+            
+            worker.postMessage({ type: 'remove-candidate', data: candidate.src, });
+            candidate.remove();
+        });
+    
+        candidiates.appendChild(candidate);
+    } else if (data.type === 'uploaded') {
+        const url = data.data;
+        const candidate = candidiates.querySelector(`[src="${CSS.escape(url)}"]`);
+
+        candidate.remove();
     }
-
-    candidate.querySelector('.edit-button').addEventListener('click', () => {
-        // TODO
-    });
-    candidate.querySelector('.trash-button').addEventListener('click', (e) => {
-        e.target.closest('.candidate').remove();
-    });
-
-    candidiates.appendChild(candidate);
 };
 
 beginUpload.addEventListener('click', () => {
@@ -37,7 +49,7 @@ selectFiles.addEventListener('click', () => {
     input.setAttribute('multiple', '');
     input.addEventListener('change', async (evt) => {
         for (const file of evt.originalTarget.files) {
-            worker.postMessage({ type: 'file', data: file, });
+            worker.postMessage({ type: 'file', data: file });
         }
     });
 

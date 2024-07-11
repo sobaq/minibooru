@@ -6,6 +6,7 @@ use auth::Authentication;
 use axum::{extract::DefaultBodyLimit, routing::get};
 use tower_http::services::ServeDir;
 
+mod traits;
 mod posts;
 mod auth;
 mod config;
@@ -51,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let db = sqlx::PgPool::connect(&config.network.database).await?;
     sqlx::migrate!().run(&db).await?;
 
-    let mut app = axum::Router::new()
+    let app = axum::Router::new()
         .nest_service("/static", ServeDir::new("static"))
         .nest_service("/static/thumb", ServeDir::new(config.data.thumbnails()))
         .nest_service("/static/media", ServeDir::new(config.data.media()))
@@ -61,8 +62,24 @@ async fn main() -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::disable())
         .with_state(State {
             config: Arc::clone(&config),
-            db,
+            db: db.clone(),
         });
+
+    let account_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users;").fetch_one(&db).await?;
+    if account_count == 0 {
+        let password = auth::kdf(&config.accounts.initial_superuser_password);
+        sqlx::query("
+            WITH superuser_group_id AS (
+                INSERT INTO groups (name, superuser)
+                VALUES ('superusers', true)
+                RETURNING id
+            )
+            INSERT INTO users (group_id, username, password)
+            SELECT id, 'superuser', $1
+            FROM superuser_group_id;
+        ").bind(&password).execute(&db).await?;
+        log::info!("Created 'superuser' account with initial password");
+    }
 
     log::debug!("FFmpeg build information: {}", ffmpeg::codec::configuration());
 

@@ -15,7 +15,7 @@ form.addEventListener('submit', async (e) => {
     let response;
     if (e.submitter.id === 'register') {
         response = await fetch('/api/auth/register', options);
-    } else if (e.submitter.id === 'login') {
+    } else if (e.submitter.id === 'log-in') {
         response = await fetch('/api/auth/login', options);
     }
 

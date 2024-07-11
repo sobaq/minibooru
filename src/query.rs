@@ -1,13 +1,19 @@
 use anyhow::Context;
 use axum::{async_trait, extract::{self, FromRef, FromRequestParts}, http::request::Parts};
 
-#[derive(Default)]
+#[derive(serde::Deserialize)]
+struct RawParams {
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Default, Debug)]
 pub struct Query {
     tags: Vec<String>,
     sort: Sort,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum Sort {
     #[default]
     Date,
@@ -22,21 +28,27 @@ where
 {
     type Rejection = crate::Error;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    /// Failably parses the `query` query parameter without rejecting the requests
+    /// so it can be reported elsewhere.
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Query, Self::Rejection> {
         // TODO: this might be worthy of an .expect() because i'm not sure how it'd ever fail
-        let query_string: String = extract::Query::from_request_parts(parts, state)
+        let query_params: RawParams = extract::Query::from_request_parts(parts, state)
                 .await
                 .context("parsing query string")?
                 .0;
-        let query_parts = query_string.split(' ').collect::<Vec<&str>>();
-
+        let query_string = query_params.query.trim();
         let mut result = Query::default();
 
+        if query_string.is_empty() {
+            return Ok(result);
+        }
+
+        let query_parts = query_string.split(' ').collect::<Vec<&str>>();
         for part in query_parts {
             if let Some((lhs, rhs)) = part.split_once(':') {
                 match lhs {
                     "sort" => result.sort = Sort::try_from(rhs)?,
-                    _ => return Err(crate::Error::Query(format!("Query category '{lhs}' does not exist"))),
+                    _ => continue,
                 }
             } else {
                 result.tags.push(part.to_string());

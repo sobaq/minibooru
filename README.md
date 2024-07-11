@@ -1,6 +1,6 @@
 # minibooru
 
-A Danbooru-style imageboard inspired by [miniflux](https://miniflux.app/).
+A Danbooru-style imageboard.
 
 ## Compatibility
 

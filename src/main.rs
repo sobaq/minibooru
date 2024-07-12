@@ -2,7 +2,7 @@
 extern crate ffmpeg_next as ffmpeg;
 use std::{fs, sync::Arc};
 use askama_axum::IntoResponse;
-use axum::{extract::DefaultBodyLimit, routing::get};
+use axum::{extract::{self, DefaultBodyLimit}, routing::get};
 use extractors::Authentication;
 use tower_http::services::ServeDir;
 
@@ -25,7 +25,7 @@ struct State {
 #[template(path = "index.html")]
 struct Index {
     signed_in: bool,
-    post_count: u32,
+    post_count: i64,
     data_size: String,
 }
 
@@ -94,16 +94,36 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn index(
+    extract::State(state): extract::State<crate::State>,
     auth: Authentication,
-) -> impl IntoResponse {
-    Index { 
+) -> crate::Result<impl IntoResponse> {
+    let (post_count, data_size): (i64, i64) = sqlx::query_scalar("
+        SELECT (COUNT(*)::BIGINT, COALESCE(SUM(posts.file_size), 0)::BIGINT)
+        FROM posts
+    ").fetch_one(&state.db).await?;
+    let data_size = readable_file_size(data_size as _)?;
+
+    Ok(Index {
         signed_in: auth.signed_in(),
-        post_count: 0,
-        data_size: String::from("0 bytes"),
-    }
+        post_count,
+        data_size,
+    })
 }
 
 async fn settings(
 ) -> impl IntoResponse {
     "Imagine a settings page here"
+}
+
+fn readable_file_size(raw: u64) -> anyhow::Result<String> {
+    let mut raw = raw as f64;
+    for unit in &["", "Ki", "Mi", "Gi"] {
+        if raw < 1024. {
+            return Ok(format!("{raw:.1}\u{00A0}{unit}B"));
+        }
+
+        raw /= 1024.;
+    }
+
+    anyhow::bail!("Given byte count too large to compute a human readable file size")
 }

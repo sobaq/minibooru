@@ -16,7 +16,7 @@ use crate::{
     query::Query,
 };
 
-#[derive(sqlx::Type, Deserialize)]
+#[derive(PartialEq, sqlx::Type, Deserialize)]
 #[sqlx(type_name = "MEDIA_TYPE", rename_all = "lowercase")]
 enum MediaType {
     Image,
@@ -221,7 +221,7 @@ async fn post_page(
         .format(&time::format_description::well_known::Rfc2822)
         .expect("Couldn't convert post timestamp to RFC2822 string");
     let posted_ago = timeago::Formatter::new().convert((time::OffsetDateTime::now_utc() - post.uploaded_at).unsigned_abs());
-    let file_size = readable_file_size(post.file_size as _)?;
+    let file_size = crate::readable_file_size(post.file_size as _)?;
 
     Ok(PostTemplate {
         signed_in: auth.signed_in(),
@@ -232,19 +232,6 @@ async fn post_page(
         posted_at,
         posted_ago,
     })
-}
-
-fn readable_file_size(raw: u64) -> anyhow::Result<String> {
-    let mut raw = raw as f64;
-    for unit in &["", "Ki", "Mi", "Gi"] {
-        if raw < 1024. {
-            return Ok(format!("{raw:.1}\u{00A0}{unit}B"));
-        }
-
-        raw /= 1024.;
-    }
-
-    anyhow::bail!("Post is too large to compute a human readable file size")
 }
 
 async fn upload(auth: Authentication) -> impl IntoResponse {

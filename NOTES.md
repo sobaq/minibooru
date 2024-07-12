@@ -1,4 +1,1 @@
-- The `ch` represents roughly the width of one character in the current font
-- Use `rem` for stuff that should scale with font size
-- <https://www.stefanjudis.com/blog/how-to-use-and-feature-detect-css-grid-masonry-layout/>
-    the minimap is awesome and i kinda want it
+- There's no hard limit on the size of uploadable media. Configure that in a forward proxy if you care

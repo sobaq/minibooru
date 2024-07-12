@@ -8,3 +8,6 @@ services:
 
     environment:
       POSTGRES_PASSWORD: postgres
+    
+    # volumes:
+    #   - /tmp/minibooru-dev-postgres:/var/lib/postgresql/data

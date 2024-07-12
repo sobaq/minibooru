@@ -6,44 +6,179 @@ use askama_axum::IntoResponse;
 use axum::{extract::{self, multipart::Field, Multipart, State}, routing::{get, post}, Json, Router};
 use hex::ToHex;
 use md5::Digest;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{fs::{self, File}, io::AsyncWriteExt};
 use infer::MatcherType;
+use uuid::Uuid;
 
 use crate::{
-    auth::{Authentication, Operation::*, Permission, Resource::*},
+    extractors::{Authentication, Operation::*, Permission, Resource::*},
     query::Query,
 };
 
+#[derive(sqlx::Type, Deserialize)]
+#[sqlx(type_name = "MEDIA_TYPE", rename_all = "lowercase")]
+enum MediaType {
+    Image,
+    Video,
+}
+
 #[derive(askama_axum::Template)]
 #[template(path = "posts.html")]
-struct Posts {
+struct PostsTemplate {
     signed_in: bool,
-    results: Vec<Result>,
+    results: Vec<QueriedPosts>,
 }
 
 #[derive(sqlx::FromRow)]
-struct Result {
+struct QueriedPosts {
     url: String,
     thumbnail_path: String,
 }
 
 #[derive(askama_axum::Template)]
 #[template(path = "post.html")]
-struct Post {
+struct PostTemplate {
     signed_in: bool,
-    media_url: String,
+    post: PostInformation,
+    tags: Vec<PostTag>,
+    pools: Vec<(i32, String)>,
+    posted_at: String,
+    posted_ago: String,
+    file_size: String,
 }
 
 #[derive(askama_axum::Template)]
 #[template(path = "upload.html")]
-struct Upload {
+struct UploadTemplate {
     signed_in: bool,
 }
 
 #[derive(Serialize)]
 struct UploadResponse {
     post_id: i32,
+}
+
+#[derive(sqlx::Type)]
+#[sqlx(type_name = "POST_VOTE", rename_all = "lowercase")]
+enum PostVote {
+    Like,
+    Dislike,
+}
+
+#[derive(sqlx::FromRow)]
+struct PostInformation {
+    pub id: i32,
+    pub uploader_id: Option<Uuid>,
+    pub md5: String,
+    pub width: i32,
+    pub height: i32,
+    pub source: String,
+    pub uploaded_at: time::OffsetDateTime,
+    pub media_type: MediaType,
+    pub file_size: i64,
+    pub media_path: String,
+    /* Additional information */
+    pub uploader: String,
+    pub group_colour: Option<String>,
+    pub score: i64,
+    pub user_vote: Option<PostVote>,
+    pub user_favourited: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct PostTag {
+    pub name: String,
+    pub colour: String,
+    pub count: i32,
+    pub rank: i32,
+}
+
+async fn get_post_info(db: &sqlx::PgPool, id: i32) -> crate::Result<(PostInformation, Vec<PostTag>, Vec<(i32, String)>)> {
+    let pi: PostInformation = sqlx::query_as("
+        WITH post_info AS (
+            SELECT * FROM posts WHERE id = $1
+        ),
+        user_info AS (
+            SELECT users.username AS uploader, users.id, users.group_id
+            FROM post_info
+            LEFT JOIN users ON users.id = post_info.uploader_id
+        ),
+        group_info AS (
+            SELECT groups.id, groups.colour AS group_colour
+            FROM user_info
+            LEFT JOIN groups ON groups.id = user_info.group_id
+        ),
+        user_vote AS (
+            SELECT post_id, user_votes.vote AS user_vote
+            FROM user_votes
+            LEFT JOIN users ON users.id = user_votes.user_id
+            WHERE user_votes.post_id = $1
+        ), post_score AS (
+            SELECT user_votes.post_id,
+                SUM(CASE WHEN user_votes.vote = 'like' THEN 1 ELSE 0 END) -
+                SUM(CASE WHEN user_votes.vote = 'dislike' THEN 1 ELSE 0 END) AS score
+            FROM user_votes
+            LEFT JOIN posts ON posts.id = user_votes.post_id 
+            WHERE user_votes.post_id = $1
+            GROUP BY user_votes.post_id
+        ),
+        favourite AS (
+            SELECT true AS favourited
+            FROM user_favourites
+            WHERE post_id = $1
+        )
+        SELECT
+            post_info.id,
+            post_info.uploader_id,
+            post_info.md5,
+            post_info.width,
+            post_info.height,
+            post_info.source,
+            post_info.uploaded_at,
+            post_info.media_type,
+            post_info.file_size,
+            ('/static/media/' || post_info.media_path) AS media_path,
+
+            COALESCE(user_info.uploader, 'Anonymous') AS uploader,
+            COALESCE(post_score.score, 0) AS score,
+            group_info.group_colour,
+            user_vote.user_vote,
+            COALESCE(favourite.favourited, false) AS user_favourited
+        FROM post_info
+        LEFT JOIN user_info ON post_info.uploader_id = user_info.id
+        LEFT JOIN group_info ON user_info.group_id = group_info.id
+        LEFT JOIN post_score ON $1 = post_score.post_id
+        LEFT JOIN user_vote ON post_info.id = user_vote.post_id
+        LEFT JOIN favourite ON post_info.id = $1;
+    ")  .bind(id)
+        .fetch_one(db)
+        .await?;
+
+    let tags: Vec<PostTag> = sqlx::query_as("
+        SELECT t.name AS name, c.colour AS colour, COUNT(pt_all.post_id) AS count, c.rank AS rank
+        FROM post_tags pt
+        JOIN tags t
+            ON pt.tag_id = t.id
+        JOIN tag_categories c ON t.category = c.id
+        LEFT JOIN post_tags pt_all ON t.id = pt_all.tag_id
+        WHERE pt.post_id = $1
+        GROUP BY t.id, c.colour, c.rank
+        ORDER BY name;
+    ")  .bind(id)
+        .fetch_all(db)
+        .await?;
+
+    let pool: Vec<(i32, String)> = sqlx::query_scalar("
+        SELECT p.id, p.name
+        FROM post_pools pp
+        JOIN pools p ON pp.pool_id = p.id
+        WHERE pp.post_id = $1
+    ")  .bind(id)
+        .fetch_all(db)
+        .await?;
+
+    Ok((pi, tags, pool))
 }
 
 pub fn routes() -> Router<crate::State> {
@@ -60,7 +195,7 @@ async fn posts(
     State(state): State<crate::State>,
     query: Query,
 ) -> crate::Result<impl IntoResponse> {
-    let results: Vec<Result> = sqlx::query_as("
+    let results: Vec<QueriedPosts> = sqlx::query_as("
         SELECT ('/posts/' || id)                    AS url,
                ('/static/thumb/' || thumbnail_path) AS thumbnail_path
         FROM posts
@@ -69,7 +204,7 @@ async fn posts(
 
     log::debug!("Serving query {query:?}");
 
-    Ok(Posts {
+    Ok(PostsTemplate {
         signed_in: auth.signed_in(),
         results,
     })
@@ -80,19 +215,40 @@ async fn post_page(
     State(state): State<crate::State>,
     extract::Path(id): extract::Path<i32>,
 ) -> crate::Result<impl IntoResponse> {
-    let media_url: String = sqlx::query_scalar("
-        SELECT '/static/media/' || media_path
-        FROM posts
-        WHERE id = $1
-    ")  .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let (post, tags, pools) = get_post_info(&state.db, id).await?;
 
-    Ok(Post { signed_in: auth.signed_in(), media_url })
+    let posted_at = post.uploaded_at
+        .format(&time::format_description::well_known::Rfc2822)
+        .expect("Couldn't convert post timestamp to RFC2822 string");
+    let posted_ago = timeago::Formatter::new().convert((time::OffsetDateTime::now_utc() - post.uploaded_at).unsigned_abs());
+    let file_size = readable_file_size(post.file_size as _)?;
+
+    Ok(PostTemplate {
+        signed_in: auth.signed_in(),
+        post,
+        tags,
+        pools,
+        file_size,
+        posted_at,
+        posted_ago,
+    })
+}
+
+fn readable_file_size(raw: u64) -> anyhow::Result<String> {
+    let mut raw = raw as f64;
+    for unit in &["", "Ki", "Mi", "Gi"] {
+        if raw < 1024. {
+            return Ok(format!("{raw:.1}\u{00A0}{unit}B"));
+        }
+
+        raw /= 1024.;
+    }
+
+    anyhow::bail!("Post is too large to compute a human readable file size")
 }
 
 async fn upload(auth: Authentication) -> impl IntoResponse {
-    Upload { signed_in: auth.signed_in(), }
+    UploadTemplate { signed_in: auth.signed_in(), }
 }
 
 async fn api_upload(
@@ -152,8 +308,8 @@ async fn save_multipart_file(
     // Create a database entry for it
     let (w, h) = media_dimensions(&temp_path)?;
     let media_type = match mime.matcher_type() {
-        MatcherType::Image => "image",
-        MatcherType::Video => "video",
+        MatcherType::Image => MediaType::Image,
+        MatcherType::Video => MediaType::Video,
         _ => unreachable!(),
     };
     let file_size: i64 = fs::metadata(&temp_path)
@@ -228,7 +384,6 @@ async fn create_thumbnail(src: &Path, dst: &Path, res: u32) -> crate::Result<()>
     Ok(())
 }
 
-
 /// Returns the first full frame from the input.
 fn first_frame(src: &Path) -> crate::Result<Video> {
     let mut ictx = ffmpeg::format::input(&src)?;
@@ -257,10 +412,10 @@ fn first_frame(src: &Path) -> crate::Result<Video> {
                         "Couldn't decode a thumbnail frame".to_string()
                     ))
                 }
+
                 frames_decoded += 1;
             };
 
-            frame.set_pts(Some(0));
             return Ok(frame);
         }
     }
@@ -283,6 +438,7 @@ fn scale_frame(frame: Video, to: u32) -> crate::Result<Video> {
 
     let mut scaled_frame = Video::empty();
     scaler.run(&frame, &mut scaled_frame)?;
+    scaled_frame.set_pts(Some(0));
 
     Ok(scaled_frame)
 }

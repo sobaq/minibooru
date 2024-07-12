@@ -1,6 +1,6 @@
 # minibooru
 
-A Danbooru-style imageboard.
+A Danbooru-style imageboard. It looks a lot like szurubooru.
 
 ## Compatibility
 

@@ -2,10 +2,11 @@
 extern crate ffmpeg_next as ffmpeg;
 use std::{fs, sync::Arc};
 use askama_axum::IntoResponse;
-use auth::Authentication;
 use axum::{extract::DefaultBodyLimit, routing::get};
+use extractors::Authentication;
 use tower_http::services::ServeDir;
 
+mod extractors;
 mod traits;
 mod posts;
 mod auth;
@@ -56,7 +57,9 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/static", ServeDir::new("static"))
         .nest_service("/static/thumb", ServeDir::new(config.data.thumbnails()))
         .nest_service("/static/media", ServeDir::new(config.data.media()))
+        
         .route("/", get(index))
+        .route("/settings", get(settings))
         .merge(posts::routes())
         .merge(auth::routes())
         .layer(DefaultBodyLimit::disable())
@@ -98,4 +101,9 @@ async fn index(
         post_count: 0,
         data_size: String::from("0 bytes"),
     }
+}
+
+async fn settings(
+) -> impl IntoResponse {
+    "Imagine a settings page here"
 }

@@ -19,15 +19,20 @@ static = ["ffmpeg-next/build"]
 
 [dependencies]
 tokio = { version = "1.38.0", features = ["rt-multi-thread", "macros"] }
+
+# Data
 serde = { version = "1.0.203", features = ["derive"] }
 toml = "0.8.14"
 regex = "1.10.5"
 serde_regex = "1.1.0"
-uuid = { version = "1.9.1", features = ["serde"] }
-# Crypto
+time = { version = "0.3.36", features = ["serde"] }
+timeago = { version = "0.4.1", default-features = false }
+
+# Crypto & Co.
 argon2 = "0.5.3"
 md-5 = "0.10.6"
 hex = "0.4.3"
+uuid = { version = "1.9.1", features = ["serde"] }
 
 # Web
 askama = { version = "0.12.1", features = ["with-axum"] }
@@ -49,4 +54,4 @@ infer = "0.16.0"
 [dependencies.sqlx]
 version = "0.7.4"
 default-features = false
-features = ["postgres", "macros", "migrate", "runtime-tokio", "uuid"]
+features = ["postgres", "time", "macros", "migrate", "runtime-tokio", "uuid"]
